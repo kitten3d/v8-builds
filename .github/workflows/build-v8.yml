@@ -1,0 +1,264 @@
+name: build-v8
+
+# Artifact factory, customer #2 (phase-5 T2, D-P5.5): builds a no-ICU
+# v8_monolithic static V8 from the Node LTS tag archive's deps/v8 on both
+# kitten platforms and publishes the tarballs as GitHub release assets with
+# printed sha256s. The wrapper module (module/) and the registry point at the
+# assets this workflow uploads.
+#
+# The only hand-chosen inputs are the Node version and its archive sha256.
+# Every other pin (chromium build.git, gn, icu config.gni) is derived from the
+# DEPS manifest inside the sha-verified archive, so a version bump cannot
+# desynchronize the pins.
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_version:
+        description: "Node LTS version whose deps/v8 to build (e.g. 24.20.0)"
+        required: true
+      node_sha256:
+        description: "sha256 of https://github.com/nodejs/node/archive/refs/tags/v<version>.tar.gz"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-latest gcc/libstdc++ matches the engine's Linux CI baseline
+          # (gcc-14) ABI-wise: the weighing proved gcc monoliths link and run
+          # under g++ -std=c++23 against system libstdc++ (weighing §3.2).
+          - os: ubuntu-latest
+            suffix: ubuntu-latest-Release
+            toolchain_args: is_clang=false
+          # macos-latest arm64 AppleClang/libc++ — the platform's only
+          # supported toolchain, same reasoning as dawn's macOS lane.
+          - os: macos-latest
+            suffix: macos-latest-Release
+            toolchain_args: is_clang=true clang_base_path="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    env:
+      NODE_VERSION: ${{ github.event.inputs.node_version }}
+      NODE_SHA256: ${{ github.event.inputs.node_sha256 }}
+      SUFFIX: ${{ matrix.suffix }}
+    steps:
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build clang python3 git curl xz-utils
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Fetch Node archive and verify sha256
+        run: |
+          curl -sSL -o node.tar.gz \
+            "https://github.com/nodejs/node/archive/refs/tags/v${NODE_VERSION}.tar.gz"
+          echo "${NODE_SHA256}  node.tar.gz" | shasum -a 256 -c -
+          mkdir v8
+          tar xf node.tar.gz -C v8 --strip-components=3 "node-${NODE_VERSION}/deps/v8"
+
+      - name: Derive pins from DEPS + V8 version from v8-version.h
+        # DEPS ships inside the sha-verified archive: the auxiliary pins are a
+        # pure function of node_version. Exec with Var/Str stubs — the values
+        # we read are plain '<url>@<sha>' concatenations.
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_ENV"
+          import re
+          g = {'Var': lambda k: '{' + k + '}', 'Str': lambda x: x}
+          exec(open('v8/DEPS').read(), g)
+          print('BUILD_COMMIT=' + g['deps']['build'].split('@')[-1])
+          print('ICU_COMMIT=' + g['deps']['third_party/icu'].split('@')[-1])
+          print('GN_COMMIT=' + g['vars']['gn_version'].split(':')[-1])
+          v = open('v8/include/v8-version.h').read()
+          n = lambda k: re.search(r'#define V8_%s (\d+)' % k, v).group(1)
+          print('V8_VERSION=%s.%s.%s.%s' % (n('MAJOR_VERSION'), n('MINOR_VERSION'), n('BUILD_NUMBER'), n('PATCH_LEVEL')))
+          EOF
+          cat "$GITHUB_ENV"
+
+      - name: Build gn at the DEPS-pinned revision
+        run: |
+          git clone https://gn.googlesource.com/gn
+          git -C gn checkout "${GN_COMMIT}"
+          python3 gn/build/gen.py
+          ninja -C gn/out gn
+          gn/out/gn --version
+
+      - name: Assemble build tree (build.git + icu config.gni at DEPS pins)
+        run: |
+          git clone https://chromium.googlesource.com/chromium/src/build.git chromium-build
+          git -C chromium-build checkout "${BUILD_COMMIT}"
+          rm -rf v8/build
+          ln -sf "$(pwd)/chromium-build" v8/build
+          echo "checkout_google_benchmark = false" > chromium-build/config/gclient_args.gni
+          mkdir -p v8/third_party/icu
+          curl -sSf "https://chromium.googlesource.com/chromium/deps/icu/+/${ICU_COMMIT}/config.gni?format=TEXT" \
+            | base64 -d > v8/third_party/icu/config.gni
+          head -3 v8/third_party/icu/config.gni
+
+      - name: gn gen (--fail-on-unused-args)
+        # The arg list is the ratified §8 set (weighing doc): no-ICU is a
+        # determinism requirement, sandbox off, pointer compression on,
+        # use_custom_libcxx=false is accepted risk R1.
+        working-directory: v8
+        run: |
+          ../gn/out/gn gen v8.static --fail-on-unused-args --args="
+            v8_monolithic=true
+            v8_static_library=true
+            v8_enable_sandbox=false
+            v8_enable_pointer_compression=true
+            ${{ matrix.toolchain_args }}
+            is_asan=false
+            is_debug=false
+            is_official_build=false
+            treat_warnings_as_errors=false
+            clang_use_chrome_plugins=false
+            v8_enable_i18n_support=false
+            v8_use_external_startup_data=false
+            use_custom_libcxx=false
+            use_sysroot=false
+            enable_rust=false
+            icu_use_data_file=false
+            use_glib=false"
+
+      - name: ninja v8_monolith + d8
+        working-directory: v8
+        run: ninja -C v8.static -j "$(getconf _NPROCESSORS_ONLN)" v8_monolith d8
+
+      - name: Acceptance gate — d8 runs
+        working-directory: v8
+        run: |
+          out="$(./v8.static/d8 -e 'print(6*7)')"
+          test "${out}" = "42" || { echo "::error::d8 said '${out}', not 42"; exit 1; }
+
+      - name: Acceptance gate — build-config header matches the ratified args
+        # v8-gn.h is the defines list the wrapper module ships (weighing §3.2:
+        # mismatch aborts at startup; shipping the header makes the engine read
+        # the same config the .a was built with).
+        run: |
+          GN_H=v8/v8.static/gen/include/v8-gn.h
+          grep -q "#define V8_COMPRESS_POINTERS 1" "$GN_H"
+          ! grep -q "#define V8_ENABLE_SANDBOX 1" "$GN_H"
+          ! grep -q "#define V8_INTL_SUPPORT 1" "$GN_H"
+          echo "v8-gn.h config as ratified:"
+          cat "$GN_H"
+
+      - name: Acceptance gate — C++ stdlib ABI
+        # Linux must be libstdc++ (__cxx11, no std::__1); macOS the inverse.
+        # This is the exact check the weighing ran on the proven prebuilts.
+        run: |
+          LIB=v8/v8.static/obj/libv8_monolith.a
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            nm -C "$LIB" 2>/dev/null | grep -q "__cxx11" || { echo "::error::no __cxx11 symbols — not libstdc++"; exit 1; }
+            ! nm "$LIB" 2>/dev/null | grep -q "std::__1" || { echo "::error::std::__1 symbols present — libc++ leaked in"; exit 1; }
+          else
+            ! nm "$LIB" 2>/dev/null | grep -q "__cxx11" || { echo "::error::__cxx11 symbols present — libstdc++ leaked in"; exit 1; }
+          fi
+          echo "stdlib ABI as expected for ${RUNNER_OS}."
+
+      - name: Stage install tree
+        # Layout the wrapper BUILD keys on: include/ (public headers + the
+        # generated v8-gn.h), lib/libv8_monolith.a, lic/.
+        run: |
+          PREFIX="V8-${V8_VERSION}-${SUFFIX}"
+          echo "PREFIX=${PREFIX}" >> "$GITHUB_ENV"
+          rm -rf "${PREFIX}"
+          install -d "${PREFIX}/include/cppgc" "${PREFIX}/include/libplatform" "${PREFIX}/lib" "${PREFIX}/lic"
+          install -m644 v8/include/*.h "${PREFIX}/include/"
+          install -m644 v8/include/cppgc/*.h "${PREFIX}/include/cppgc/"
+          install -m644 v8/include/libplatform/*.h "${PREFIX}/include/libplatform/"
+          install -m644 v8/v8.static/gen/include/v8-gn.h "${PREFIX}/include/v8-gn.h"
+          install -m644 v8/v8.static/obj/libv8_monolith.a "${PREFIX}/lib/libv8_monolith.a"
+          install -m644 v8/LICENSE* "${PREFIX}/lic/"
+
+      - name: Acceptance gate — library size sanity
+        run: |
+          LIB="${PREFIX}/lib/libv8_monolith.a"
+          bytes="$(wc -c < "${LIB}")"
+          echo "libv8_monolith.a = ${bytes} bytes"
+          if [ "${bytes}" -lt 31457280 ]; then
+            echo "::error::${LIB} is ${bytes} bytes, under the 30 MB floor"
+            exit 1
+          fi
+
+      - name: Package tarball
+        run: tar -czf "${PREFIX}.tar.gz" "${PREFIX}"
+
+      - name: Acceptance gate — tarball prefix
+        run: |
+          bad="$(tar tf "${PREFIX}.tar.gz" | grep -v "^${PREFIX}/" || true)"
+          if [ -n "${bad}" ]; then
+            echo "::error::entries outside ${PREFIX}/ prefix:"
+            echo "${bad}"
+            exit 1
+          fi
+          echo "All entries under ${PREFIX}/."
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PREFIX }}
+          path: ${{ env.PREFIX }}.tar.gz
+
+  # One release, both platforms, both sha256s in one summary — avoids the
+  # create-release race a per-matrix-job publish would have.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      NODE_VERSION: ${{ github.event.inputs.node_version }}
+      NODE_SHA256: ${{ github.event.inputs.node_sha256 }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Derive release tag and compute sha256s
+        run: |
+          ls -la
+          V8_VERSION="$(ls V8-*-ubuntu-latest-Release.tar.gz | sed -E 's/^V8-(.+)-ubuntu-latest-Release\.tar\.gz$/\1/')"
+          echo "V8_VERSION=${V8_VERSION}" >> "$GITHUB_ENV"
+          echo "TAG=v${V8_VERSION}" >> "$GITHUB_ENV"
+          sha256sum V8-*.tar.gz | tee shas.txt
+          {
+            echo "## V8 build artifacts"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| V8 | \`${V8_VERSION}\` |"
+            echo "| Node | \`v${NODE_VERSION}\` (\`${NODE_SHA256}\`) |"
+            while read -r sha file; do
+              echo "| \`${file}\` | \`${sha}\` |"
+            done < shas.txt
+            echo ""
+            echo "Put these sha256s into \`module/extensions.bzl\` (_SHA256S)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish release and upload assets
+        run: |
+          NOTES="No-ICU \`v8_monolithic\` static V8 ${V8_VERSION} for kitten (Linux x86-64 gcc, macOS arm64 AppleClang).
+
+          - Node source: \`v${NODE_VERSION}\` tag archive, sha256 \`${NODE_SHA256}\`
+          - sha256s:
+          \`\`\`
+          $(cat shas.txt)
+          \`\`\`
+
+          Set \`_SHA256S\` in \`module/extensions.bzl\` to the values above."
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" --notes "${NOTES}"
+          else
+            gh release create "${TAG}" --title "${TAG}" --notes "${NOTES}"
+          fi
+          gh release upload "${TAG}" V8-*.tar.gz --clobber
