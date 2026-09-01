@@ -28,8 +28,8 @@ _SUFFIXES = {
 # sha256s of OUR kitten3d/v8-builds release assets, as printed by the build-v8
 # workflow run that published them.
 _SHA256S = {
-    "linux": "",  # TODO(T2): pin from the first build-v8 workflow run
-    "macos_arm64": "",  # TODO(T2): pin from the first build-v8 workflow run
+    "linux": "",  # TODO: pin from the first build-v8 workflow run
+    "macos_arm64": "",  # TODO: pin from the first build-v8 workflow run
 }
 
 def _v8_bin_impl(ctx):

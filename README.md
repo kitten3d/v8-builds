@@ -1,15 +1,12 @@
 # v8-builds
 
 Artifact factory and wrapper Bazel module for [V8](https://v8.dev), as
-consumed by the kitten3d engine (phase-5 scripting runtime, D-P5.5). The
-factory's second customer after dawn-builds. Nobody in the ecosystem serves a
-current, no-ICU, gn-monolithic static V8 for gcc/libstdc++ **and**
+consumed by the kitten3d engine's script runtime. The factory's second
+customer after dawn-builds. Nobody in the ecosystem serves a current,
+no-ICU, gn-monolithic static V8 for gcc/libstdc++ **and**
 AppleClang/libc++ — this repo builds both from the Node LTS tag archive's
 `deps/v8` (the depot_tools-free route) and serves them as a single
 platform-neutral Bazel module named `v8`.
-
-Ratified evidence: `kitten/plans/script-language-weighing.md` (§3.2 the
-recipe, §8 the lane + accepted risks R1–R3).
 
 ## How the pieces fit
 
@@ -18,7 +15,7 @@ recipe, §8 the lane + accepted risks R1–R3).
    every auxiliary pin (chromium `build.git`, `gn`, icu `config.gni`) from
    the DEPS manifest *inside* the verified archive, builds the no-ICU
    `v8_monolith` on `ubuntu-latest` (gcc) and `macos-latest` (AppleClang),
-   gates the result (d8 runs, `v8-gn.h` config matches the ratified args,
+   gates the result (d8 runs, `v8-gn.h` config matches the intended args,
    stdlib ABI check, size, tarball prefix), and publishes
    `V8-<version>-<platform>-Release.tar.gz` release assets with both sha256s
    in one step summary.
@@ -54,19 +51,22 @@ recipe, §8 the lane + accepted risks R1–R3).
    `metadata.json`.
 6. **Engine**: bump `bazel_dep(name = "v8", ...)`, `bazel test //:tests`.
 
-Measured churn expectation (weighing §2): ~zero source edits per bump — a
-~450-line embedder compiled unmodified across twelve V8 milestones.
+Expected churn: ~zero source edits per bump — V8's embedder surface is
+deprecation-managed (`V8_DEPRECATED` → one-branch grace → removal), and a
+~450-line test embedder compiled unmodified across the twelve milestones
+from 12.4 to 13.6.
 
-## Standing notes (accepted risks, ratified 2026-09-01)
+## Standing notes (accepted risks)
 
 - **R1**: `use_custom_libcxx=false` is upstream-deprecated with stated intent
   to remove, no date. The Node-vendored build path every distro ships is
   insulated; if it ever dies, the engine's script firewall makes a QuickJS
-  swap module-internal (weighing §3.1 proved that lane end-to-end).
+  swap module-internal (QuickJS has a proven source-only registry lane).
 - **R2**: this factory owns V8 freshness alone — nobody upstreamable tracks
   stable. The cadence above is the mitigation; scripts are first-party
   content only. If scripts ever become user content, the threat model
-  inverts (sandbox back on) — that day is a new grill.
+  inverts (sandbox back on) — that day forces a fresh decision, not a
+  footnote here.
 - The icu `config.gni` fetch is one pinned file from the DEPS-named icu
   revision; with `v8_enable_i18n_support=false` + `icu_use_data_file=false`
   nothing else of ICU is referenced.
