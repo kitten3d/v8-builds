@@ -11,7 +11,8 @@ platform-neutral Bazel module named `v8`.
 ## How the pieces fit
 
 1. **`.github/workflows/build-v8.yml`** — the artifact factory. Dispatched
-   with a Node version + its archive sha256, it extracts `deps/v8`, derives
+   with no inputs it builds the newest Node LTS release (explicit
+   `node_version`/`node_sha256` inputs override); it extracts `deps/v8`, derives
    every auxiliary pin (chromium `build.git`, `gn`, icu `config.gni`) from
    the DEPS manifest *inside* the verified archive, builds the no-ICU
    `v8_monolith` on `ubuntu-latest` (gcc) and `macos-latest` (AppleClang),
@@ -36,20 +37,19 @@ platform-neutral Bazel module named `v8`.
 
 ## V8 version-bump procedure (quarterly, tracking Node LTS)
 
-1. **Pick the Node LTS release** (`https://nodejs.org/dist/index.json`, the
-   newest release of the current LTS line — its `v8` field is the version you
-   get) and compute the tag-archive sha:
-   `curl -sL https://github.com/nodejs/node/archive/refs/tags/v<ver>.tar.gz | sha256sum`.
-2. **Dispatch** `build-v8` with that version + sha. It publishes both
-   platform tarballs and prints their sha256s.
-3. **Update `module/`**: set `V8_VERSION`/`V8_TAG` and both `_SHA256S`
+1. **Dispatch** `build-v8` with no inputs: it resolves the newest Node LTS
+   release, computes the tag-archive sha256, and publishes both platform
+   tarballs with every sha256 in the run summary. Pass `node_version` (and
+   optionally `node_sha256` to pin the archive up front) to build a
+   specific release instead.
+2. **Update `module/`**: set `V8_VERSION`/`V8_TAG` and both `_SHA256S`
    entries in `extensions.bzl`, bump `version` in `module/MODULE.bazel`.
-4. **Package**: `tools/package-module.sh`, upload `v8-module-<version>.tar.gz`
+3. **Package**: `tools/package-module.sh`, upload `v8-module-<version>.tar.gz`
    to the same release, copy the printed SRI integrity.
-5. **Registry**: add `modules/v8/<version>/` (copy of `MODULE.bazel` +
+4. **Registry**: add `modules/v8/<version>/` (copy of `MODULE.bazel` +
    `source.json` with the new URL and integrity), append the version to
    `metadata.json`.
-6. **Engine**: bump `bazel_dep(name = "v8", ...)`, `bazel test //:tests`.
+5. **Engine**: bump `bazel_dep(name = "v8", ...)`, `bazel test //:tests`.
 
 Expected churn: ~zero source edits per bump — V8's embedder surface is
 deprecation-managed (`V8_DEPRECATED` → one-branch grace → removal), and a

@@ -4,17 +4,45 @@ on:
   workflow_dispatch:
     inputs:
       node_version:
-        description: "Node LTS version whose deps/v8 to build (e.g. 24.20.0)"
-        required: true
+        description: "Node version whose deps/v8 to build (default: newest Node LTS release)"
+        required: false
       node_sha256:
-        description: "sha256 of https://github.com/nodejs/node/archive/refs/tags/v<version>.tar.gz"
-        required: true
+        description: "sha256 of https://github.com/nodejs/node/archive/refs/tags/v<version>.tar.gz (default: computed from the download)"
+        required: false
 
 permissions:
   contents: write
 
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      node_version: ${{ steps.pin.outputs.node_version }}
+      node_sha256: ${{ steps.pin.outputs.node_sha256 }}
+    steps:
+      - name: Resolve Node version and archive sha256
+        id: pin
+        env:
+          NODE_VERSION: ${{ github.event.inputs.node_version }}
+          NODE_SHA256: ${{ github.event.inputs.node_sha256 }}
+        run: |
+          if [ -z "${NODE_VERSION}" ]; then
+            NODE_VERSION="$(curl -sSf https://nodejs.org/dist/index.json \
+              | python3 -c 'import json,sys; print(next(r for r in json.load(sys.stdin) if r["lts"])["version"].lstrip("v"))')"
+          fi
+          curl -sSL -o node.tar.gz \
+            "https://github.com/nodejs/node/archive/refs/tags/v${NODE_VERSION}.tar.gz"
+          if [ -n "${NODE_SHA256}" ]; then
+            echo "${NODE_SHA256}  node.tar.gz" | shasum -a 256 -c -
+          else
+            NODE_SHA256="$(shasum -a 256 node.tar.gz | awk '{print $1}')"
+          fi
+          echo "node_version=${NODE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "node_sha256=${NODE_SHA256}" >> "$GITHUB_OUTPUT"
+          echo "Building from Node \`v${NODE_VERSION}\` (archive sha256 \`${NODE_SHA256}\`)" >> "$GITHUB_STEP_SUMMARY"
+
   build:
+    needs: resolve
     strategy:
       fail-fast: false
       matrix:
@@ -28,8 +56,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 300
     env:
-      NODE_VERSION: ${{ github.event.inputs.node_version }}
-      NODE_SHA256: ${{ github.event.inputs.node_sha256 }}
+      NODE_VERSION: ${{ needs.resolve.outputs.node_version }}
+      NODE_SHA256: ${{ needs.resolve.outputs.node_sha256 }}
       SUFFIX: ${{ matrix.suffix }}
     steps:
       - name: Install build dependencies (Linux)
@@ -209,11 +237,11 @@ jobs:
 
   # single job avoids the create-release race a per-matrix publish would have
   publish:
-    needs: build
+    needs: [resolve, build]
     runs-on: ubuntu-latest
     env:
-      NODE_VERSION: ${{ github.event.inputs.node_version }}
-      NODE_SHA256: ${{ github.event.inputs.node_sha256 }}
+      NODE_VERSION: ${{ needs.resolve.outputs.node_version }}
+      NODE_SHA256: ${{ needs.resolve.outputs.node_sha256 }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
     steps:
