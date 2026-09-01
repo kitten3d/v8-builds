@@ -1,2 +1,3 @@
 # Build/packaging artifacts — release assets, never checked in.
 *.tar.gz
+.local-verify/
