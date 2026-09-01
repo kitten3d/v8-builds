@@ -129,6 +129,36 @@ jobs:
             icu_use_data_file=false
             use_glib=false"
 
+      - name: Generate v8-gn.h (separate gen-only dir)
+        # v8_generate_external_defines_header=true poisons the library build at
+        # this version (every TU gets -DV8_GN_HEADER but v8_libbase lacks the
+        # gen/include path), so the header is produced by running the one
+        # gen_v8_gn action in its own out dir with otherwise identical args —
+        # the defines list is a pure function of the args, verified
+        # byte-identical across gen dirs when this recipe was proven locally.
+        working-directory: v8
+        run: |
+          ../gn/out/gn gen v8.gnh --fail-on-unused-args --args="
+            v8_monolithic=true
+            v8_static_library=true
+            v8_enable_sandbox=false
+            v8_enable_pointer_compression=true
+            ${{ matrix.toolchain_args }}
+            is_asan=false
+            is_debug=false
+            is_official_build=false
+            treat_warnings_as_errors=false
+            clang_use_chrome_plugins=false
+            v8_enable_i18n_support=false
+            v8_use_external_startup_data=false
+            use_custom_libcxx=false
+            use_sysroot=false
+            enable_rust=false
+            icu_use_data_file=false
+            use_glib=false
+            v8_generate_external_defines_header=true"
+          ninja -C v8.gnh gen_v8_gn
+
       - name: ninja v8_monolith + d8
         working-directory: v8
         run: ninja -C v8.static -j "$(getconf _NPROCESSORS_ONLN)" v8_monolith d8
@@ -144,7 +174,7 @@ jobs:
         # mismatch aborts at startup; shipping the header makes the engine read
         # the same config the .a was built with).
         run: |
-          GN_H=v8/v8.static/gen/include/v8-gn.h
+          GN_H=v8/v8.gnh/gen/include/v8-gn.h
           grep -q "#define V8_COMPRESS_POINTERS 1" "$GN_H"
           ! grep -q "#define V8_ENABLE_SANDBOX 1" "$GN_H"
           ! grep -q "#define V8_INTL_SUPPORT 1" "$GN_H"
@@ -155,12 +185,12 @@ jobs:
         # Linux must be libstdc++ (__cxx11, no std::__1); macOS the inverse.
         # This is the exact check the weighing ran on the proven prebuilts.
         run: |
-          LIB=v8/v8.static/obj/libv8_monolith.a
+          nm -C v8/v8.static/obj/libv8_monolith.a > syms.txt 2>/dev/null || true
           if [ "${RUNNER_OS}" = "Linux" ]; then
-            nm -C "$LIB" 2>/dev/null | grep -q "__cxx11" || { echo "::error::no __cxx11 symbols — not libstdc++"; exit 1; }
-            ! nm "$LIB" 2>/dev/null | grep -q "std::__1" || { echo "::error::std::__1 symbols present — libc++ leaked in"; exit 1; }
+            grep -q "__cxx11" syms.txt || { echo "::error::no __cxx11 symbols — not libstdc++"; exit 1; }
+            ! grep -q "std::__1" syms.txt || { echo "::error::std::__1 symbols present — libc++ leaked in"; exit 1; }
           else
-            ! nm "$LIB" 2>/dev/null | grep -q "__cxx11" || { echo "::error::__cxx11 symbols present — libstdc++ leaked in"; exit 1; }
+            ! grep -q "__cxx11" syms.txt || { echo "::error::__cxx11 symbols present — libstdc++ leaked in"; exit 1; }
           fi
           echo "stdlib ABI as expected for ${RUNNER_OS}."
 
@@ -171,11 +201,11 @@ jobs:
           PREFIX="V8-${V8_VERSION}-${SUFFIX}"
           echo "PREFIX=${PREFIX}" >> "$GITHUB_ENV"
           rm -rf "${PREFIX}"
-          install -d "${PREFIX}/include/cppgc" "${PREFIX}/include/libplatform" "${PREFIX}/lib" "${PREFIX}/lic"
-          install -m644 v8/include/*.h "${PREFIX}/include/"
-          install -m644 v8/include/cppgc/*.h "${PREFIX}/include/cppgc/"
-          install -m644 v8/include/libplatform/*.h "${PREFIX}/include/libplatform/"
-          install -m644 v8/v8.static/gen/include/v8-gn.h "${PREFIX}/include/v8-gn.h"
+          install -d "${PREFIX}/lib" "${PREFIX}/lic"
+          # Whole include tree: 13.6 public headers reach into cppgc/internal/
+          # and friends, so a flat *.h copy under-ships.
+          cp -a v8/include "${PREFIX}/include"
+          install -m644 v8/v8.gnh/gen/include/v8-gn.h "${PREFIX}/include/v8-gn.h"
           install -m644 v8/v8.static/obj/libv8_monolith.a "${PREFIX}/lib/libv8_monolith.a"
           install -m644 v8/LICENSE* "${PREFIX}/lic/"
 
