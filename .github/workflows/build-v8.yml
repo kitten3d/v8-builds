@@ -1,16 +1,5 @@
 name: build-v8
 
-# Artifact factory, customer #2 after dawn-builds: builds a no-ICU
-# v8_monolithic static V8 from the Node LTS tag archive's deps/v8 on both
-# kitten platforms and publishes the tarballs as GitHub release assets with
-# printed sha256s. The wrapper module (module/) and the registry point at the
-# assets this workflow uploads.
-#
-# The only hand-chosen inputs are the Node version and its archive sha256.
-# Every other pin (chromium build.git, gn, icu config.gni) is derived from the
-# DEPS manifest inside the sha-verified archive, so a version bump cannot
-# desynchronize the pins.
-
 on:
   workflow_dispatch:
     inputs:
@@ -30,14 +19,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ubuntu-latest gcc/libstdc++ matches the engine's Linux CI baseline
-          # (gcc-14) ABI-wise: gcc monoliths are proven to link and run
-          # under g++ -std=c++23 against system libstdc++.
           - os: ubuntu-latest
             suffix: ubuntu-latest-Release
             toolchain_args: is_clang=false
-          # macos-latest arm64 AppleClang/libc++ — the platform's only
-          # supported toolchain, same reasoning as dawn's macOS lane.
           - os: macos-latest
             suffix: macos-latest-Release
             toolchain_args: is_clang=true clang_base_path="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr"
@@ -67,9 +51,7 @@ jobs:
           tar xf node.tar.gz -C v8 --strip-components=3 "node-${NODE_VERSION}/deps/v8"
 
       - name: Derive pins from DEPS + V8 version from v8-version.h
-        # DEPS ships inside the sha-verified archive: the auxiliary pins are a
-        # pure function of node_version. Exec with Var/Str stubs — the values
-        # we read are plain '<url>@<sha>' concatenations.
+        # DEPS is python-ish; Var/Str stubs make it exec-able
         run: |
           python3 - <<'EOF' >> "$GITHUB_ENV"
           import re
@@ -105,10 +87,6 @@ jobs:
           head -3 v8/third_party/icu/config.gni
 
       - name: gn gen (--fail-on-unused-args)
-        # The arg list is deliberate: no-ICU is a determinism requirement
-        # (ICU leaks the process locale into script output), sandbox off,
-        # pointer compression on, use_custom_libcxx=false is accepted risk
-        # R1 (see README).
         working-directory: v8
         run: |
           ../gn/out/gn gen v8.static --fail-on-unused-args --args="
@@ -131,12 +109,10 @@ jobs:
             use_glib=false"
 
       - name: Generate v8-gn.h (separate gen-only dir)
-        # v8_generate_external_defines_header=true poisons the library build at
-        # this version (every TU gets -DV8_GN_HEADER but v8_libbase lacks the
-        # gen/include path), so the header is produced by running the one
-        # gen_v8_gn action in its own out dir with otherwise identical args —
-        # the defines list is a pure function of the args, verified
-        # byte-identical across gen dirs when this recipe was proven locally.
+        # v8_generate_external_defines_header=true poisons the library build
+        # (every TU gets -DV8_GN_HEADER without the include path for it), so
+        # the one gen_v8_gn action runs in its own out dir; its output is a
+        # pure function of the other args
         working-directory: v8
         run: |
           ../gn/out/gn gen v8.gnh --fail-on-unused-args --args="
@@ -171,9 +147,6 @@ jobs:
           test "${out}" = "42" || { echo "::error::d8 said '${out}', not 42"; exit 1; }
 
       - name: Acceptance gate — build-config header matches the intended args
-        # v8-gn.h is the defines list the wrapper module ships: V8 aborts at
-        # startup on an embedder-vs-build config mismatch, and shipping the
-        # header makes consumers read the exact config the .a was built with.
         run: |
           GN_H=v8/v8.gnh/gen/include/v8-gn.h
           grep -q "#define V8_COMPRESS_POINTERS 1" "$GN_H"
@@ -183,8 +156,6 @@ jobs:
           cat "$GN_H"
 
       - name: Acceptance gate — C++ stdlib ABI
-        # Linux must be libstdc++ (__cxx11, no std::__1); macOS the inverse.
-        # Catches a runner-toolchain change that would swap the stdlib ABI.
         run: |
           nm -C v8/v8.static/obj/libv8_monolith.a > syms.txt 2>/dev/null || true
           if [ "${RUNNER_OS}" = "Linux" ]; then
@@ -196,15 +167,12 @@ jobs:
           echo "stdlib ABI as expected for ${RUNNER_OS}."
 
       - name: Stage install tree
-        # Layout the wrapper BUILD keys on: include/ (public headers + the
-        # generated v8-gn.h), lib/libv8_monolith.a, lic/.
         run: |
           PREFIX="V8-${V8_VERSION}-${SUFFIX}"
           echo "PREFIX=${PREFIX}" >> "$GITHUB_ENV"
           rm -rf "${PREFIX}"
           install -d "${PREFIX}/lib" "${PREFIX}/lic"
-          # Whole include tree: 13.6 public headers reach into cppgc/internal/
-          # and friends, so a flat *.h copy under-ships.
+          # whole tree: public headers reach into cppgc/internal/ and friends
           cp -a v8/include "${PREFIX}/include"
           install -m644 v8/v8.gnh/gen/include/v8-gn.h "${PREFIX}/include/v8-gn.h"
           install -m644 v8/v8.static/obj/libv8_monolith.a "${PREFIX}/lib/libv8_monolith.a"
@@ -239,8 +207,7 @@ jobs:
           name: ${{ env.PREFIX }}
           path: ${{ env.PREFIX }}.tar.gz
 
-  # One release, both platforms, both sha256s in one summary — avoids the
-  # create-release race a per-matrix-job publish would have.
+  # single job avoids the create-release race a per-matrix publish would have
   publish:
     needs: build
     runs-on: ubuntu-latest

@@ -1,22 +1,13 @@
 """Platform-aware downloader for pre-built V8 monolith binaries.
 
-Same shape as dawn-builds' extensions.bzl: one ctx.os -> platform key map,
-download_and_extract with stripPrefix. This file is the single source of truth
-for the V8 version pin, both per-platform URLs, and both sha256s.
-
-Both binaries come from our own kitten3d/v8-builds release (the artifact
-factory's second customer): no-ICU v8_monolithic static libraries built from
-the Node LTS tag archive's deps/v8 — see the build-v8 workflow. The artifact
-carries the generated v8-gn.h next to the public headers; v8_bin.BUILD defines
-V8_GN_HEADER so every consumer TU compiles against the exact build config the
-.a was built with (a mismatch is a compile-time error, not a startup abort).
+Single source of truth for the V8 version pin, both per-platform URLs, and
+both sha256s. Both binaries come from our own kitten3d/v8-builds release:
+no-ICU v8_monolithic static libraries built by the build-v8 workflow.
 """
 
-# ─── V8 version pin (bump this block for a new Node-LTS/V8 version) ──────────
 V8_VERSION = "13.6.233.17"
 V8_TAG = "v13.6.233.17"
 
-# ─── URL base ────────────────────────────────────────────────────────────────
 _BASE = "https://github.com/kitten3d/v8-builds/releases/download"
 
 _SUFFIXES = {
@@ -24,9 +15,6 @@ _SUFFIXES = {
     "macos_arm64": "macos-latest-Release",
 }
 
-# ─── sha256 checksums, keyed by platform ─────────────────────────────────────
-# sha256s of OUR kitten3d/v8-builds release assets, as printed by the build-v8
-# workflow run that published them.
 _SHA256S = {
     "linux": "",  # TODO: pin from the first build-v8 workflow run
     "macos_arm64": "",  # TODO: pin from the first build-v8 workflow run

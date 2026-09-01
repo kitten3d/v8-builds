@@ -1,4 +1,3 @@
-# Consumer-facing label: @v8//:v8 -> @v8_bin//:v8.
 alias(
     name = "v8",
     actual = "@v8_bin//:v8",
