@@ -49,10 +49,8 @@ jobs:
         include:
           - os: ubuntu-latest
             suffix: ubuntu-latest-Release
-            toolchain_args: is_clang=false
           - os: macos-latest
             suffix: macos-latest-Release
-            toolchain_args: is_clang=true clang_base_path="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 300
     env:
@@ -69,6 +67,16 @@ jobs:
       - name: Install build dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install ninja
+
+      - name: Set toolchain args
+        # clang_base_path must reach gn as a quoted string literal, so the
+        # quotes are assembled here instead of in matrix/YAML interpolation
+        run: |
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            echo "TOOLCHAIN_ARGS=is_clang=true clang_base_path=\"$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr\"" >> "$GITHUB_ENV"
+          else
+            echo "TOOLCHAIN_ARGS=is_clang=false" >> "$GITHUB_ENV"
+          fi
 
       - name: Fetch Node archive and verify sha256
         run: |
@@ -122,7 +130,7 @@ jobs:
             v8_static_library=true
             v8_enable_sandbox=false
             v8_enable_pointer_compression=true
-            ${{ matrix.toolchain_args }}
+            ${TOOLCHAIN_ARGS}
             is_asan=false
             is_debug=false
             is_official_build=false
@@ -148,7 +156,7 @@ jobs:
             v8_static_library=true
             v8_enable_sandbox=false
             v8_enable_pointer_compression=true
-            ${{ matrix.toolchain_args }}
+            ${TOOLCHAIN_ARGS}
             is_asan=false
             is_debug=false
             is_official_build=false
