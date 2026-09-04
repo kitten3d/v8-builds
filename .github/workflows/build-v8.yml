@@ -70,10 +70,18 @@ jobs:
 
       - name: Set toolchain args
         # clang_base_path must reach gn as a quoted string literal, so the
-        # quotes are assembled here instead of in matrix/YAML interpolation
+        # quotes are assembled here instead of in matrix/YAML interpolation.
+        # use_lld=false: Xcode's toolchain ships neither llvm-ar nor lld, and
+        # use_lld defaults to is_clang; off, build.git archives with Xcode's
+        # libtool and links with ld64 (-B <toolchain>/usr/bin).
+        # symbol_level=0: build.git defaults macOS to full DWARF (-g2 plus
+        # -debug-info-kind=limited), a 4.3 GB libv8_monolith.a; Linux
+        # defaults to line tables (~100 MB). Line tables on macOS still leave
+        # ~800 MB, so macOS ships no DWARF (function names stay in the
+        # symbol table)
         run: |
           if [ "${RUNNER_OS}" = "macOS" ]; then
-            echo "TOOLCHAIN_ARGS=is_clang=true clang_base_path=\"$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr\"" >> "$GITHUB_ENV"
+            echo "TOOLCHAIN_ARGS=is_clang=true use_lld=false symbol_level=0 clang_base_path=\"$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr\"" >> "$GITHUB_ENV"
           else
             echo "TOOLCHAIN_ARGS=is_clang=false" >> "$GITHUB_ENV"
           fi
