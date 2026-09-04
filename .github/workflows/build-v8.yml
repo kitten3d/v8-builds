@@ -94,6 +94,7 @@ jobs:
           g = {'Var': lambda k: '{' + k + '}', 'Str': lambda x: x}
           exec(open('v8/DEPS').read(), g)
           print('BUILD_COMMIT=' + g['deps']['build'].split('@')[-1])
+          print('BUILDTOOLS_COMMIT=' + g['deps']['buildtools'].split('@')[-1])
           print('ICU_COMMIT=' + g['deps']['third_party/icu'].split('@')[-1])
           print('GN_COMMIT=' + g['vars']['gn_version'].split(':')[-1])
           v = open('v8/include/v8-version.h').read()
@@ -110,13 +111,19 @@ jobs:
           ninja -C gn/out gn
           gn/out/gn --version
 
-      - name: Assemble build tree (build.git + icu config.gni at DEPS pins)
+      - name: Assemble build tree (build.git + buildtools + icu config.gni at DEPS pins)
         run: |
           git clone https://chromium.googlesource.com/chromium/src/build.git chromium-build
           git -C chromium-build checkout "${BUILD_COMMIT}"
           rm -rf v8/build
           ln -sf "$(pwd)/chromium-build" v8/build
           echo "checkout_google_benchmark = false" > chromium-build/config/gclient_args.gni
+          # clang builds pull //buildtools/third_party/libc++ module targets
+          # (empty with modules off), so the repo must exist to load
+          git clone https://chromium.googlesource.com/chromium/src/buildtools.git chromium-buildtools
+          git -C chromium-buildtools checkout "${BUILDTOOLS_COMMIT}"
+          rm -rf v8/buildtools
+          ln -sf "$(pwd)/chromium-buildtools" v8/buildtools
           mkdir -p v8/third_party/icu
           curl -sSf "https://chromium.googlesource.com/chromium/deps/icu/+/${ICU_COMMIT}/config.gni?format=TEXT" \
             | base64 -d > v8/third_party/icu/config.gni
@@ -142,7 +149,8 @@ jobs:
             use_sysroot=false
             enable_rust=false
             icu_use_data_file=false
-            use_glib=false"
+            use_glib=false
+            v8_enable_fuzztest=false"
 
       - name: Generate v8-gn.h (separate gen-only dir)
         # v8_generate_external_defines_header=true poisons the library build
@@ -169,6 +177,7 @@ jobs:
             enable_rust=false
             icu_use_data_file=false
             use_glib=false
+            v8_enable_fuzztest=false
             v8_generate_external_defines_header=true"
           ninja -C v8.gnh gen_v8_gn
 
