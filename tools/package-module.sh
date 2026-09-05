@@ -31,6 +31,7 @@ mkdir -p "${workdir}/${prefix}"
 cp -a "${module_dir}/." "${workdir}/${prefix}/"
 
 tar \
+    --format=gnu \
     --sort=name \
     --owner=0 --group=0 --numeric-owner \
     --mtime='UTC 2026-01-01' \
