@@ -16,8 +16,8 @@ _SUFFIXES = {
 }
 
 _SHA256S = {
-    "linux": "",  # TODO: pin from the first build-v8 workflow run
-    "macos_arm64": "",  # TODO: pin from the first build-v8 workflow run
+    "linux": "14f83641311836a264aea992cc126497ad16bbd6a7deb9b4f6fbecd7ebc5286e",
+    "macos_arm64": "f022d958d9c6cb905f2ba5489931ae034bda7e66278d5dccc4b6eb65c25d7e90",
 }
 
 def _v8_bin_impl(ctx):
