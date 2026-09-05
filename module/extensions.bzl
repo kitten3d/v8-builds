@@ -16,8 +16,8 @@ _SUFFIXES = {
 }
 
 _SHA256S = {
-    "linux": "14f83641311836a264aea992cc126497ad16bbd6a7deb9b4f6fbecd7ebc5286e",
-    "macos_arm64": "f022d958d9c6cb905f2ba5489931ae034bda7e66278d5dccc4b6eb65c25d7e90",
+    "linux": "bb15d8b05bd8f58800b8976ab69c5ff590c039ec8b1117323bcee425ba540ae7",
+    "macos_arm64": "6e733cfbadee5008504df89f391f572907891d43b9f2842da8d40658802c7e37",
 }
 
 def _v8_bin_impl(ctx):
