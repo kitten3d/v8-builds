@@ -94,6 +94,26 @@ jobs:
           mkdir v8
           tar xf node.tar.gz -C v8 --strip-components=3 "node-${NODE_VERSION}/deps/v8"
 
+      - name: Confine V8's Abseil to an inline namespace
+        # Dawn's static library bundles its own Abseil; two copies in one
+        # game binary collide on ~800 strong symbols. Abseil's own option
+        # for that case renames every symbol (C hooks included) at compile
+        # time, so V8's copy lives in absl::v8_<major>_<minor>.
+        run: |
+          v="$(grep -E '#define V8_MAJOR_VERSION' v8/include/v8-version.h | awk '{print $3}')"
+          w="$(grep -E '#define V8_MINOR_VERSION' v8/include/v8-version.h | awk '{print $3}')"
+          echo "ABSL_NS=v8_${v}_${w}" >> "$GITHUB_ENV"
+          OPT=v8/third_party/abseil-cpp/absl/base/options.h
+          grep -q '^#define ABSL_OPTION_USE_INLINE_NAMESPACE 0$' "$OPT"
+          grep -q '^#define ABSL_OPTION_INLINE_NAMESPACE_NAME head$' "$OPT"
+          sed -i.bak -e 's/^#define ABSL_OPTION_USE_INLINE_NAMESPACE 0$/#define ABSL_OPTION_USE_INLINE_NAMESPACE 1/' \
+                     -e "s/^#define ABSL_OPTION_INLINE_NAMESPACE_NAME head$/#define ABSL_OPTION_INLINE_NAMESPACE_NAME v8_${v}_${w}/" "$OPT"
+          grep -n '^#define ABSL_OPTION_USE_INLINE_NAMESPACE\|^#define ABSL_OPTION_INLINE_NAMESPACE_NAME' "$OPT"
+          # one C hook upstream forgot to wrap in ABSL_INTERNAL_C_SYMBOL
+          grep -rl AbslInternalGetFileMappingHint v8/third_party/abseil-cpp/absl \
+            | xargs sed -i.bak "s/AbslInternalGetFileMappingHint/AbslInternalGetFileMappingHint_v8_${v}_${w}/g"
+          find v8/third_party/abseil-cpp -name '*.bak' -delete
+
       - name: Derive pins from DEPS + V8 version from v8-version.h
         # DEPS is python-ish; Var/Str stubs make it exec-able
         run: |
@@ -207,6 +227,19 @@ jobs:
           ! grep -q "#define V8_INTL_SUPPORT 1" "$GN_H"
           echo "v8-gn.h config:"
           cat "$GN_H"
+
+      - name: Acceptance gate — no bare Abseil symbol
+        run: |
+          LIB=v8/v8.static/obj/libv8_monolith.a
+          nm -g --defined-only "$LIB" 2>/dev/null | awk 'NF>=2{print $NF}' | sort -u > raw.txt
+          bare="$(c++filt < raw.txt | grep -E 'absl::' | grep -vc "absl::${ABSL_NS}::" || true)"
+          hooks="$(grep -E '^_?Absl' raw.txt | grep -vc "_${ABSL_NS}$" || true)"
+          echo "bare absl:: symbols: ${bare}; unsuffixed Absl* hooks: ${hooks}"
+          if [ "${bare}" != "0" ] || [ "${hooks}" != "0" ]; then
+            echo "::error::Abseil symbols escaped the ${ABSL_NS} inline namespace"
+            c++filt < raw.txt | grep -E 'absl::' | grep -v "absl::${ABSL_NS}::" | head
+            exit 1
+          fi
 
       - name: Acceptance gate — C++ stdlib ABI
         run: |
