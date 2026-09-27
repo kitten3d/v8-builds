@@ -17,9 +17,9 @@ _SUFFIXES = {
 }
 
 _SHA256S = {
-    "linux_x86_64": "",
-    "linux_arm64": "",
-    "macos_arm64": "",
+    "linux_x86_64": "0e0e26be708403864f0c2eee7fe2acaab07d75b561dc0e765b69f9402767b052",
+    "linux_arm64": "0275ff66d4627373469c37c8f210858a2437485441e91d15372b4cf3f8d21136",
+    "macos_arm64": "70b4e3937407d2d0bc7209ac0e09f2c57e348a2189fd6c277d86822d2fec2594",
 }
 
 def _os(name):
