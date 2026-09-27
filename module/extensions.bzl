@@ -1,7 +1,7 @@
 """Platform-aware downloader for pre-built V8 monolith binaries.
 
-Single source of truth for the V8 version pin, both per-platform URLs, and
-both sha256s. Both binaries come from our own kitten3d/v8-builds release:
+Single source of truth for the V8 version pin, the per-platform URLs, and
+their sha256s. Every binary comes from our own kitten3d/v8-builds release:
 no-ICU v8_monolithic static libraries built by the build-v8 workflow.
 """
 
@@ -11,30 +11,42 @@ V8_TAG = "v13.6.233.17"
 _BASE = "https://github.com/kitten3d/v8-builds/releases/download"
 
 _SUFFIXES = {
-    "linux": "ubuntu-latest-Release",
-    "macos_arm64": "macos-latest-Release",
+    "linux_x86_64": "linux-x86_64-Release",
+    "linux_arm64": "linux-arm64-Release",
+    "macos_arm64": "macos-arm64-Release",
 }
 
 _SHA256S = {
-    "linux": "bb15d8b05bd8f58800b8976ab69c5ff590c039ec8b1117323bcee425ba540ae7",
-    "macos_arm64": "6e733cfbadee5008504df89f391f572907891d43b9f2842da8d40658802c7e37",
+    "linux_x86_64": "",
+    "linux_arm64": "",
+    "macos_arm64": "",
 }
 
-def _v8_bin_impl(ctx):
-    os_name = ctx.os.name.lower()
-    arch = ctx.os.arch
+def _os(name):
+    if "mac" in name:
+        return "macos"
+    if "linux" in name:
+        return "linux"
+    return name
 
-    if "mac" in os_name and ("aarch64" in arch or "arm64" in arch):
-        key = "macos_arm64"
-    elif "linux" in os_name and ("amd64" in arch or "x86_64" in arch):
-        key = "linux"
-    else:
-        fail(("No prebuilt V8 for {} {}: v8-builds ships linux x86-64 and " +
-              "macos arm64 only (kitten's two platforms).").format(os_name, arch))
+def _arch(arch):
+    if "aarch64" in arch or "arm64" in arch:
+        return "arm64"
+    if "amd64" in arch or "x86_64" in arch:
+        return "x86_64"
+    return arch
+
+def _v8_bin_impl(ctx):
+    key = "{}_{}".format(_os(ctx.os.name.lower()), _arch(ctx.os.arch))
+    if key not in _SUFFIXES:
+        fail("No prebuilt V8 for {}; v8-builds ships {}.".format(
+            key,
+            ", ".join(sorted(_SUFFIXES.keys())),
+        ))
 
     sha = _SHA256S[key]
     if not sha:
-        fail("v8-builds: sha256 for '{}' is unpinned — run the build-v8 ".format(key) +
+        fail("v8-builds: sha256 for '{}' is unpinned; run the build-v8 ".format(key) +
              "workflow and copy the printed sha into _SHA256S.")
 
     prefix = "V8-{}-{}".format(V8_VERSION, _SUFFIXES[key])

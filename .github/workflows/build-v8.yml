@@ -47,10 +47,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            suffix: ubuntu-latest-Release
+          - os: ubuntu-24.04
+            suffix: linux-x86_64-Release
+          - os: ubuntu-24.04-arm
+            suffix: linux-arm64-Release
           - os: macos-latest
-            suffix: macos-latest-Release
+            suffix: macos-arm64-Release
     runs-on: ${{ matrix.os }}
     timeout-minutes: 300
     env:
@@ -85,6 +87,15 @@ jobs:
           else
             echo "TOOLCHAIN_ARGS=is_clang=false" >> "$GITHUB_ENV"
           fi
+
+      - name: Check triplet-prefixed gcc tools (Linux arm64)
+        # gn's arm64 gcc toolchain is written for cross builds and invokes
+        # aarch64-linux-gnu-*; native Ubuntu ships those names as symlinks
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        run: |
+          for t in gcc g++ ar nm readelf; do
+            command -v "aarch64-linux-gnu-${t}" || { echo "::error::aarch64-linux-gnu-${t} not on PATH"; exit 1; }
+          done
 
       - name: Fetch Node archive and verify sha256
         run: |
@@ -296,7 +307,7 @@ jobs:
   # single job avoids the create-release race a per-matrix publish would have
   publish:
     needs: [resolve, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       NODE_VERSION: ${{ needs.resolve.outputs.node_version }}
       NODE_SHA256: ${{ needs.resolve.outputs.node_sha256 }}
@@ -311,7 +322,7 @@ jobs:
       - name: Derive release tag and compute sha256s
         run: |
           ls -la
-          V8_VERSION="$(ls V8-*-ubuntu-latest-Release.tar.gz | sed -E 's/^V8-(.+)-ubuntu-latest-Release\.tar\.gz$/\1/')"
+          V8_VERSION="$(ls V8-*-linux-x86_64-Release.tar.gz | sed -E 's/^V8-(.+)-linux-x86_64-Release\.tar\.gz$/\1/')"
           echo "V8_VERSION=${V8_VERSION}" >> "$GITHUB_ENV"
           echo "TAG=v${V8_VERSION}" >> "$GITHUB_ENV"
           sha256sum V8-*.tar.gz | tee shas.txt
@@ -331,7 +342,7 @@ jobs:
 
       - name: Publish release and upload assets
         run: |
-          NOTES="No-ICU \`v8_monolithic\` static V8 ${V8_VERSION} for kitten (Linux x86-64 gcc, macOS arm64 AppleClang).
+          NOTES="No-ICU \`v8_monolithic\` static V8 ${V8_VERSION} for kitten (Linux x86-64 and arm64 gcc, macOS arm64 AppleClang).
 
           - Node source: \`v${NODE_VERSION}\` tag archive, sha256 \`${NODE_SHA256}\`
           - sha256s:

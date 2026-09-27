@@ -15,7 +15,7 @@ if [ -z "${version}" ]; then
     exit 1
 fi
 
-if grep -qE '"(linux|macos_arm64)": ""' "${module_dir}/extensions.bzl"; then
+if grep -qE '"[a-z0-9_]+": ""' "${module_dir}/extensions.bzl"; then
     echo "error: unpinned sha256 in ${module_dir}/extensions.bzl — run the" >&2
     echo "build-v8 workflow and pin _SHA256S before packaging" >&2
     exit 1

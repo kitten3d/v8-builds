@@ -15,22 +15,24 @@ platform-neutral Bazel module named `v8`.
    `node_version`/`node_sha256` inputs override); it extracts `deps/v8`, derives
    every auxiliary pin (chromium `build.git`, `gn`, icu `config.gni`) from
    the DEPS manifest *inside* the verified archive, builds the no-ICU
-   `v8_monolith` on `ubuntu-latest` (gcc) and `macos-latest` (AppleClang),
-   gates the result (d8 runs, `v8-gn.h` config matches the intended args,
-   stdlib ABI check, size, tarball prefix), and publishes
-   `V8-<version>-<platform>-Release.tar.gz` release assets with both sha256s
-   in one step summary.
+   `v8_monolith` for Linux x86-64 and arm64 (gcc, on `ubuntu-24.04` and
+   `ubuntu-24.04-arm`) and macOS arm64 (AppleClang), gates each result (d8
+   runs, `v8-gn.h` config matches the intended args, stdlib ABI check, size,
+   tarball prefix), and publishes `V8-<version>-<os>-<arch>-Release.tar.gz`
+   release assets with every sha256 in one step summary.
 2. **`module/`** — the `v8` wrapper module. `extensions.bzl` picks the right
-   per-platform prebuilt at repo-fetch time and exposes it as `@v8_bin`;
-   `//:v8` aliases `@v8_bin//:v8` so consumers write `@v8//:v8`. Both URLs
-   and sha256s live in `extensions.bzl` as the single source of truth. The
+   prebuilt for the host OS and CPU at repo-fetch time and exposes it as
+   `@v8_bin`; `//:v8` aliases `@v8_bin//:v8` so consumers write `@v8//:v8`.
+   Every URL and sha256 lives in `extensions.bzl` as the single source of
+   truth; a host with no entry fails at fetch naming the supported set. The
    artifact ships the generated `v8-gn.h` and the BUILD sets `V8_GN_HEADER`,
    so consumer TUs compile against the exact build config of the `.a` — a
    config mismatch is a compile error, not V8's runtime startup abort.
 3. **`tools/package-module.sh`** — packages `module/` into a
    byte-deterministic `v8-module-<version>.tar.gz` and prints its sha256 +
    SRI integrity. This tarball is the extra asset on the release and is what
-   the registry serves. It refuses to package while `_SHA256S` is unpinned.
+   the registry serves. It refuses to package while any `_SHA256S` entry is
+   unpinned.
 4. **The registry** (`kitten3d/bazel-registry`) — holds `v8`'s metadata, a
    byte-identical copy of `module/MODULE.bazel`, and a `source.json` pointing
    at the wrapper-module tarball. Consumers add one `bazel_dep(name = "v8")`.
@@ -38,12 +40,12 @@ platform-neutral Bazel module named `v8`.
 ## V8 version-bump procedure (quarterly, tracking Node LTS)
 
 1. **Dispatch** `build-v8` with no inputs: it resolves the newest Node LTS
-   release, computes the tag-archive sha256, and publishes both platform
-   tarballs with every sha256 in the run summary. Pass `node_version` (and
+   release, computes the tag-archive sha256, and publishes every platform
+   tarball with every sha256 in the run summary. Pass `node_version` (and
    optionally `node_sha256` to pin the archive up front) to build a
    specific release instead.
-2. **Update `module/`**: set `V8_VERSION`/`V8_TAG` and both `_SHA256S`
-   entries in `extensions.bzl`, bump `version` in `module/MODULE.bazel`.
+2. **Update `module/`**: set `V8_VERSION`/`V8_TAG` and every `_SHA256S`
+   entry in `extensions.bzl`, bump `version` in `module/MODULE.bazel`.
 3. **Package**: `tools/package-module.sh`, upload `v8-module-<version>.tar.gz`
    to the same release, copy the printed SRI integrity.
 4. **Registry**: add `modules/v8/<version>/` (copy of `MODULE.bazel` +
