@@ -97,9 +97,31 @@ jobs:
             command -v "aarch64-linux-gnu-${t}" || { echo "::error::aarch64-linux-gnu-${t} not on PATH"; exit 1; }
           done
 
+      - name: Write network retry helper
+        # googlesource throttles parallel runners with 503s and truncated
+        # packs; exponential backoff with jitter keeps the jobs out of step
+        run: |
+          cat > "${RUNNER_TEMP}/retry.sh" <<'SH'
+          retry() {
+            delay=15
+            for i in 1 2 3 4 5 6; do
+              "$@" && return 0
+              [ "$i" = 6 ] && return 1
+              s=$((delay + RANDOM % delay))
+              echo "::warning::attempt ${i} of '$*' failed; retrying in ${s}s"
+              sleep "$s"
+              delay=$((delay * 2))
+            done
+          }
+          clone_at() {
+            rm -rf "$2" && git clone "$1" "$2" && git -C "$2" checkout "$3"
+          }
+          SH
+
       - name: Fetch Node archive and verify sha256
         run: |
-          curl -sSL -o node.tar.gz \
+          . "${RUNNER_TEMP}/retry.sh"
+          retry curl -sSfL -o node.tar.gz \
             "https://github.com/nodejs/node/archive/refs/tags/v${NODE_VERSION}.tar.gz"
           echo "${NODE_SHA256}  node.tar.gz" | shasum -a 256 -c -
           mkdir v8
@@ -144,28 +166,29 @@ jobs:
 
       - name: Build gn at the DEPS-pinned revision
         run: |
-          git clone https://gn.googlesource.com/gn
-          git -C gn checkout "${GN_COMMIT}"
+          . "${RUNNER_TEMP}/retry.sh"
+          retry clone_at https://gn.googlesource.com/gn gn "${GN_COMMIT}"
           python3 gn/build/gen.py
           ninja -C gn/out gn
           gn/out/gn --version
 
       - name: Assemble build tree (build.git + buildtools + icu config.gni at DEPS pins)
         run: |
-          git clone https://chromium.googlesource.com/chromium/src/build.git chromium-build
-          git -C chromium-build checkout "${BUILD_COMMIT}"
+          . "${RUNNER_TEMP}/retry.sh"
+          retry clone_at https://chromium.googlesource.com/chromium/src/build.git chromium-build "${BUILD_COMMIT}"
           rm -rf v8/build
           ln -sf "$(pwd)/chromium-build" v8/build
           echo "checkout_google_benchmark = false" > chromium-build/config/gclient_args.gni
           # clang builds pull //buildtools/third_party/libc++ module targets
           # (empty with modules off), so the repo must exist to load
-          git clone https://chromium.googlesource.com/chromium/src/buildtools.git chromium-buildtools
-          git -C chromium-buildtools checkout "${BUILDTOOLS_COMMIT}"
+          retry clone_at https://chromium.googlesource.com/chromium/src/buildtools.git chromium-buildtools "${BUILDTOOLS_COMMIT}"
           rm -rf v8/buildtools
           ln -sf "$(pwd)/chromium-buildtools" v8/buildtools
           mkdir -p v8/third_party/icu
-          curl -sSf "https://chromium.googlesource.com/chromium/deps/icu/+/${ICU_COMMIT}/config.gni?format=TEXT" \
-            | base64 -d > v8/third_party/icu/config.gni
+          retry curl -sSf -o icu-config.b64 \
+            "https://chromium.googlesource.com/chromium/deps/icu/+/${ICU_COMMIT}/config.gni?format=TEXT"
+          base64 -d < icu-config.b64 > v8/third_party/icu/config.gni
+          grep -q icu_use_data_file v8/third_party/icu/config.gni
           head -3 v8/third_party/icu/config.gni
 
       - name: gn gen (--fail-on-unused-args)
